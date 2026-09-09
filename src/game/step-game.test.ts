@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_GAME_CONFIG } from './config'
+import { createGameConfig, DEFAULT_GAME_CONFIG } from './config'
 import { createGame } from './create-game'
 import type { Direction, GameState, PlayerState } from './types'
 import { stepGame } from './step-game'
@@ -72,5 +72,67 @@ describe('stepGame', () => {
     expect(second.players.one!.direction).toBe('left')
     expect(second.players.one!.queuedDirections).toEqual([])
     expect(second.players.one!.body[0]).toEqual({ x: 9, y: 9 })
+  })
+
+  it('grows and scores when the next head reaches food, then places food on a free cell', () => {
+    const state = withPlayer(runningGame(), 'one', { body: [{ x: 10, y: 10 }, { x: 9, y: 10 }], direction: 'right' })
+    const withFood = { ...state, food: { x: 11, y: 10 } }
+    const result = stepGame(withFood, 'one', () => 0)
+    expect(result.players.one!.body).toEqual([{ x: 11, y: 10 }, { x: 10, y: 10 }, { x: 9, y: 10 }])
+    expect(result.players.one!.score).toBe(DEFAULT_GAME_CONFIG.pointsPerFood)
+    expect(result.food).not.toBeNull()
+    expect(result.food).not.toEqual({ x: 11, y: 10 })
+    expect(result.players.one!.body).not.toContainEqual(result.food)
+  })
+
+  it('reduces speed by each food step without going below the minimum', () => {
+    const config = createGameConfig({ ...DEFAULT_GAME_CONFIG, baseTickMs: 100, speedStepMs: 35, minTickMs: 40 })
+    const initial = { ...createGame({ config, playerIds: ['one'], random }), status: 'running' as const }
+    const state = withPlayer({ ...initial, food: { x: 11, y: 10 } }, 'one', { body: [{ x: 10, y: 10 }], direction: 'right' })
+    const first = stepGame(state, 'one', () => 0)
+    expect(first.tickIntervalMs).toBe(65)
+    const secondState = withPlayer({ ...first, food: { x: 12, y: 10 } }, 'one', { direction: 'right' })
+    expect(stepGame(secondState, 'one', () => 0).tickIntervalMs).toBe(40)
+  })
+
+  it('loses on collision with a retained body segment and does not score or replace food', () => {
+    const food = { x: 5, y: 5 }
+    const state = withPlayer({ ...runningGame(), food }, 'one', { body: [{ x: 10, y: 10 }, { x: 11, y: 10 }, { x: 12, y: 10 }], direction: 'right', score: 7 })
+    const result = stepGame(state, 'one', () => 0)
+    expect(result.status).toBe('lost')
+    expect(result.players.one!.score).toBe(7)
+    expect(result.food).toEqual(food)
+  })
+
+  it('allows moving into the tail cell when the tail is vacated', () => {
+    const state = withPlayer(runningGame(), 'one', { body: [{ x: 10, y: 10 }, { x: 9, y: 10 }], direction: 'left' })
+    const result = stepGame(state, 'one', random)
+    expect(result.status).toBe('running')
+    expect(result.players.one!.body[0]).toEqual({ x: 9, y: 10 })
+  })
+
+  it('loses when food is on a geometrically colliding retained segment', () => {
+    const state = withPlayer({ ...runningGame(), food: { x: 11, y: 10 } }, 'one', { body: [{ x: 10, y: 10 }, { x: 11, y: 10 }], direction: 'right' })
+    expect(stepGame(state, 'one', random).status).toBe('lost')
+  })
+
+  it('wins after eating the final free cell', () => {
+    const config = createGameConfig({ ...DEFAULT_GAME_CONFIG, width: 2, height: 2, startingBody: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] })
+    const initial = { ...createGame({ config, playerIds: ['one'], random }), status: 'running' as const, food: { x: 0, y: 1 } }
+    const headedDown = withPlayer(initial, 'one', { direction: 'down' })
+    const result = stepGame(headedDown, 'one', random)
+    expect(result.status).toBe('won')
+    expect(result.food).toBeNull()
+    expect(result.players.one!.body).toHaveLength(4)
+    expect(result.players.one!.score).toBe(config.pointsPerFood)
+    expect(result.tickIntervalMs).toBe(config.baseTickMs - config.speedStepMs)
+  })
+
+  it('keeps unrelated players unchanged when the addressed player eats', () => {
+    const state = { ...withPlayer(runningGame(['one', 'two']), 'one', { body: [{ x: 10, y: 10 }], direction: 'right' }), food: { x: 11, y: 10 } }
+    const remote = state.players.two!
+    const result = stepGame(state, 'one', random)
+    expect(result.players.two).toBe(remote)
+    expect(result.players.two).toEqual(remote)
   })
 })
