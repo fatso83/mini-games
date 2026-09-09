@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mountGame, type AppDependencies } from './main'
+import { DEFAULT_GAME_CONFIG } from './game/config'
+import { listFreeCells } from './game/food'
+import type { PlayerState } from './game/types'
 
 function context(): CanvasRenderingContext2D {
   return { setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), fillStyle: '' } as unknown as CanvasRenderingContext2D
@@ -92,13 +95,13 @@ describe('mountGame', () => {
   it('shows a visible Norwegian error and does not start when context is unavailable', () => {
     const error = new Error('no 2d')
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    const input = deps({ getCanvasContext: () => { throw error } })
+    const input = deps({ getCanvasContext: () => null })
     const root = document.createElement('main')
     mountGame(root, input)
     expect(root.textContent).toMatch(/Canvas|grafikk/i)
     expect(root.querySelector('[data-error]')?.hasAttribute('hidden')).toBe(false)
     expect(input.frames).toHaveLength(0)
-    expect(log).toHaveBeenCalledWith(error)
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Canvas 2D') }))
     log.mockRestore()
   })
 
@@ -113,14 +116,39 @@ describe('mountGame', () => {
     expect(calls.at(-1)?.[0]).toBe(2)
   })
 
+  it('updates the displayed score after eating food on a fixed tick', () => {
+    let time = 0
+    let randomCalls = 0
+    const starter: PlayerState = { id: 'local', body: DEFAULT_GAME_CONFIG.startingBody, direction: 'right', queuedDirections: [], score: 0 }
+    const free = listFreeCells(DEFAULT_GAME_CONFIG, [starter])
+    const foodIndex = free.findIndex(({ x, y }) => x === 11 && y === 10)
+    const input = deps({ now: () => time, random: () => randomCalls++ === 0 ? foodIndex / free.length : 0 })
+    const root = document.createElement('main')
+    const mounted = mountGame(root, input)
+    const canvas = root.querySelector('canvas')!
+    input.frames.shift()!(0)
+    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }))
+    time = 140; input.frames.shift()!(time)
+    time = 280; input.frames.shift()!(time)
+    expect(mounted.getState().players.local?.score).toBe(10)
+    expect(root.querySelector('[data-score]')?.textContent).toBe('10')
+  })
+
   it('cleans up frame and input listeners', () => {
     const input = deps()
     const root = document.createElement('main')
     const mounted = mountGame(root, input)
     const canvas = root.querySelector('canvas')!
-    mounted.destroy()
+    const focus = vi.spyOn(canvas, 'focus')
+    const button = root.querySelector('button')!
     canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }))
-    expect(mounted.getState().status).toBe('ready')
+    expect(mounted.getState().status).toBe('running')
+    mounted.destroy()
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }))
+    button.click()
+    expect(focus).not.toHaveBeenCalled()
+    expect(mounted.getState().status).toBe('running')
     expect(input.cancelFrame).toHaveBeenCalled()
   })
 
