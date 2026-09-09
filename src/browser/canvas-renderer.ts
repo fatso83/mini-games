@@ -33,8 +33,10 @@ export function createCanvasRenderer(canvas: HTMLCanvasElement, context: CanvasR
       const cssHeight = rect ? rect.height : canvas.clientHeight || 0
       const dprValue = getDevicePixelRatio()
       const dpr = Number.isFinite(dprValue) && dprValue > 0 ? dprValue : 1
-      canvas.width = Math.round(cssWidth * dpr)
-      canvas.height = Math.round(cssHeight * dpr)
+      const backingWidth = Math.round(cssWidth * dpr)
+      const backingHeight = Math.round(cssHeight * dpr)
+      if (canvas.width !== backingWidth) canvas.width = backingWidth
+      if (canvas.height !== backingHeight) canvas.height = backingHeight
       context.setTransform(dpr, 0, 0, dpr, 0, 0)
       context.clearRect(0, 0, cssWidth, cssHeight)
       const layout = calculateBoardLayout(cssWidth, cssHeight, state.config.width, state.config.height)

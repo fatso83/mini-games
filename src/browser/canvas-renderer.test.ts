@@ -9,6 +9,9 @@ describe('calculateBoardLayout', () => {
   it('handles zero-sized CSS dimensions without invalid numbers', () => {
     expect(calculateBoardLayout(0, 300, 20, 10)).toEqual({ cellSize: 0, boardWidth: 0, boardHeight: 0, offsetX: 0, offsetY: 150 })
   })
+  it('centers a height-constrained board horizontally', () => {
+    expect(calculateBoardLayout(500, 300, 10, 20)).toEqual({ cellSize: 15, boardWidth: 150, boardHeight: 300, offsetX: 175, offsetY: 0 })
+  })
 })
 
 describe('canvas renderer', () => {
@@ -19,14 +22,41 @@ describe('canvas renderer', () => {
     const renderer = createCanvasRenderer(canvas, context, () => 1.5)
     const players = Object.create(null) as Record<string, PlayerState>
     players.alpha = { id: 'alpha', body: [{ x: 0, y: 0 }, { x: 1, y: 0 }], direction: 'right', queuedDirections: [], score: 0 }
-    players.beta = { id: 'beta', body: [{ x: 3, y: 2 }], direction: 'up', queuedDirections: [], score: 0 }
+    players.beta = { id: 'beta', body: [{ x: 3, y: 1 }], direction: 'up', queuedDirections: [], score: 0 }
     renderer.render({ config: { width: 4, height: 2 } as GameState['config'], players, food: { x: 2, y: 1 }, status: 'running', tickIntervalMs: 100 })
     expect(canvas.width).toBe(300)
     expect(canvas.height).toBe(150)
     expect(calls[0]).toEqual(['setTransform', 1.5, 0, 0, 1.5, 0, 0])
     expect(calls[1]).toEqual(['clearRect', 0, 0, 200, 100])
-    expect(calls.filter(([name]) => name === 'fillRect')).toHaveLength(4)
+    expect(calls.filter(([name]) => name === 'fillRect')).toEqual([
+      ['fillRect', 100, 50, 50, 50],
+      ['fillRect', 0, 0, 50, 50],
+      ['fillRect', 50, 0, 50, 50],
+      ['fillRect', 150, 50, 50, 50],
+    ])
     expect(context.fillStyle).toBe('#55d66b')
+  })
+  it('does not reset the backing store when size and DPR are unchanged', () => {
+    let backingWidth = 0
+    let backingHeight = 0
+    let widthAssignments = 0
+    let heightAssignments = 0
+    const canvas = {
+      get width() { return backingWidth },
+      set width(value: number) { backingWidth = value; widthAssignments++ },
+      get height() { return backingHeight },
+      set height(value: number) { backingHeight = value; heightAssignments++ },
+      getBoundingClientRect: () => ({ width: 200, height: 100 }),
+    } as unknown as HTMLCanvasElement
+    const context = { setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), fillStyle: '' } as unknown as CanvasRenderingContext2D
+    const renderer = createCanvasRenderer(canvas, context, () => 1)
+    const state = { config: { width: 4, height: 2 } as GameState['config'], players: Object.create(null), food: null, status: 'ready' as const, tickIntervalMs: 100 }
+    renderer.render(state)
+    widthAssignments = 0
+    heightAssignments = 0
+    renderer.render(state)
+    expect(widthAssignments).toBe(0)
+    expect(heightAssignments).toBe(0)
   })
   it('supports client-size fallback and no food', () => {
     const context = { setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), fillStyle: '' } as unknown as CanvasRenderingContext2D
