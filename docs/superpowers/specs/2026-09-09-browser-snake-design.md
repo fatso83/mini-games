@@ -32,15 +32,15 @@ Spillkjernen uttrykkes som rene tilstandsoverganger så langt det er praktisk. E
 
 ## Domenemodell
 
-En samlet, validert spillkonfigurasjon definerer brettstørrelse, startkropp og -retning, grunnintervall, hastighetstrinn, minimumsintervall, poeng per matbit og inputkøens kapasitet. Produksjonen bruker ett standardsett, mens testene kan opprette små, målrettede brett.
+En samlet, validert og uforanderlig spillkonfigurasjon definerer brettstørrelse, startkropp og -retning, grunnintervall, hastighetstrinn, minimumsintervall, poeng per matbit og inputkøens kapasitet. Konfigurasjonen er en del av spilltilstanden og er eneste sannhetskilde for disse verdiene. Produksjonen bruker ett standardsett, mens testene kan opprette små, målrettede brett.
 
 Spilltilstanden inneholder:
 
-- Brettets bredde og høyde målt i logiske ruter
+- Den uforanderlige spillkonfigurasjonen
 - En samling spillere indeksert med stabil spiller-ID
-- Én aktiv matposisjon i første versjon
+- En valgfri matposisjon: til stede under en spillbar runde og fraværende når brettet er fullt og vunnet
 - Rundestatus: klar, kjører, pauset, tapt eller vunnet
-- Gjeldende simuleringsintervall og grenser for hastighetsøkning
+- Gjeldende simuleringsintervall; hastighetsgrensene hentes bare fra konfigurasjonen
 
 Hver spiller inneholder:
 
@@ -49,7 +49,6 @@ Hver spiller inneholder:
 - Gjeldende retning
 - En begrenset kø av godkjente retningskommandoer
 - Poengsum
-- Spillerstatus
 
 MVP-en oppretter bare én spiller. Samlingsmodellen og kommandoer adressert med spiller-ID bevarer en naturlig overgang til flere lokale eller nettverkstilkoblede spillere senere. Det bygges ingen abstrakt nettverksprotokoll før den trengs.
 
@@ -67,6 +66,7 @@ MVP-en oppretter bare én spiller. Samlingsmodellen og kommandoer adressert med 
 - Når slangen ikke spiser, fjernes halen før egenkollisjon avgjøres. Det er derfor lovlig å flytte inn i ruten halen forlater i samme steg. Når slangen spiser, beholdes halen og hele den eksisterende kroppen teller ved kollisjon.
 - Når ingen ledig rute finnes etter at mat er spist, avsluttes runden som vunnet.
 - Mellomrom starter en klar runde og veksler mellom pause og fortsettelse mens runden er aktiv. Akkumulert tid nullstilles ved pause og fortsettelse, slik at fortsettelse ikke utløser umiddelbare innhentingssteg.
+- Når spillet settes på pause, tømmes ventende retningskommandoer. Retningskommandoer ignoreres mens spillet er pauset; etter fortsettelse beholder slangen retningen den hadde ved pausen.
 - Knappen «Ny runde» kan brukes når som helst og tilbakestiller spillet til `klar`. Etter tap eller seier kan Enter gjøre det samme.
 
 Senere flerspillerregler, blant annet kollisjoner mellom slanger, er uttrykkelig utsatt. Domenemodellen skal ikke late som slike regler allerede er bestemt.
@@ -79,8 +79,8 @@ Antall innhentingssteg per frame begrenses. Hvis fanen har vært i bakgrunnen el
 
 Dataflyten er:
 
-1. Tastaturhendelser oversettes til spilleradresserte kommandoer.
-2. Kommandoene valideres og legges i spillerens inputkø.
+1. Retningstaster oversettes til spilleradresserte retningskommandoer. De valideres og legges i spillerens inputkø.
+2. Mellomrom, Enter og knappen «Ny runde» oversettes til globale rundekommandoer. De behandles umiddelbart som egne tilstandsoverganger og legges aldri i spillerens retningskø.
 3. Den faste løkken ber spillkjernen beregne neste tilstand.
 4. Rendereren mottar siste tilstand og tegner den.
 5. DOM-elementer for poeng og rundestatus oppdateres fra samme tilstand.
@@ -96,6 +96,8 @@ Siden viser:
 - Rundestatus
 - Korte instruksjoner for piltaster/WASD og pause
 - En tydelig knapp for ny runde
+
+Canvas-elementet kan ta tastaturfokus og får fokus når spilleren klikker eller trykker på det. Etter «Ny runde» flyttes fokus tilbake til Canvas. Spilltaster håndteres når Canvas har fokus; dette lar resten av siden beholde normal tastatur- og rulleoppførsel.
 
 Canvas tilpasses tilgjengelig visuell størrelse og enhetens pikselforhold, mens det logiske rutenettet forblir uendret. Rendereren beregner rutestørrelse og sentrerer brettet ved behov. Hvis Canvas 2D ikke er tilgjengelig, erstattes spillflaten med en forståelig feilmelding.
 
@@ -116,11 +118,14 @@ Vitest tester spillkjernen uten DOM eller Canvas. Testene skal dekke:
 - Wrap-around ved venstre, høyre, øvre og nedre kant
 - Avvisning av direkte 180-graders vending
 - Korrekt behandling av flere raske retningskommandoer
+- At køen forbruker nøyaktig én kommando per spillsteg og ignorerer nye kommandoer når den er full
 - Vekst, poengøkning og matfornyelse
 - Trinnvis hastighetsøkning og maksimal hastighet
 - Matplassering utelukkende på ledige ruter
 - Kollisjon med egen kropp
+- Lovlig flytting inn i ruten halen forlater i samme steg
 - Pause, fortsettelse, omstart, tap og seier
+- At pause tømmer retningskøen, og at retningsinput ignoreres mens spillet er pauset
 - At spilleradresserte oppdateringer ikke utilsiktet endrer en annen spiller i en kunstig tilstand med flere spillere
 - Relevante grenseverdier, inkludert nesten fullt og helt fullt brett
 
