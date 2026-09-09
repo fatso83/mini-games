@@ -14,7 +14,7 @@ export interface AppDependencies {
   readonly requestFrame: (callback: FrameRequestCallback) => number
   readonly cancelFrame: (handle: number) => void
   readonly getCanvasContext: (canvas: HTMLCanvasElement) => CanvasRenderingContext2D | null
-  readonly devicePixelRatio: number
+  readonly devicePixelRatio: () => number
 }
 
 export interface MountedGame {
@@ -55,7 +55,7 @@ export function mountGame(root: HTMLElement, deps: AppDependencies): MountedGame
   try {
     const context = deps.getCanvasContext(view.canvas)
     if (!context) throw new Error('Canvas 2D-kontekst er ikke tilgjengelig')
-    renderer = createCanvasRenderer(view.canvas, context, () => deps.devicePixelRatio)
+    renderer = createCanvasRenderer(view.canvas, context, deps.devicePixelRatio)
   } catch (error) {
     view.error.hidden = false
     view.error.textContent = 'Kan ikke starte spillet: Canvas-grafikk er ikke tilgjengelig.'
@@ -100,4 +100,4 @@ export function mountGame(root: HTMLElement, deps: AppDependencies): MountedGame
 }
 
 const app = document.querySelector<HTMLElement>('#app')
-if (app) mountGame(app, { random: () => Math.random(), now: () => performance.now(), requestFrame: (callback) => requestAnimationFrame(callback), cancelFrame: (handle) => cancelAnimationFrame(handle), getCanvasContext: (canvas) => canvas.getContext('2d'), devicePixelRatio: globalThis.devicePixelRatio || 1 })
+if (app) mountGame(app, { random: () => Math.random(), now: () => performance.now(), requestFrame: (callback) => requestAnimationFrame(callback), cancelFrame: (handle) => cancelAnimationFrame(handle), getCanvasContext: (canvas) => canvas.getContext('2d'), devicePixelRatio: () => globalThis.devicePixelRatio || 1 })
