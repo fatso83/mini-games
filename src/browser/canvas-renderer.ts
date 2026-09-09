@@ -9,7 +9,7 @@ export interface BoardLayout {
 }
 
 export interface CanvasRenderer {
-  render(state: GameState): void
+  readonly render: (state: GameState) => void
 }
 
 export function calculateBoardLayout(cssWidth: number, cssHeight: number, columns: number, rows: number): BoardLayout {
