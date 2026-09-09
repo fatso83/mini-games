@@ -41,7 +41,7 @@ export function createGameConfig(input: GameConfigInput): GameConfig {
   if (input.baseTickMs < input.minTickMs) throw new Error('baseTickMs must be at least minTickMs')
   if (!Number.isFinite(input.speedStepMs) || input.speedStepMs <= 0) throw new Error('speedStepMs must be positive')
   if (!Number.isFinite(input.minTickMs) || input.minTickMs < 1) throw new Error('minTickMs must be positive')
-  if (input.pointsPerFood < 1) throw new Error('pointsPerFood must be positive')
+  if (!Number.isFinite(input.pointsPerFood) || input.pointsPerFood < 1) throw new Error('pointsPerFood must be a finite positive number')
   if (!Number.isInteger(input.inputQueueSize) || input.inputQueueSize < 1) throw new Error('inputQueueSize must be a positive integer')
   return deepFreeze({ ...input, startingBody: input.startingBody.map((position) => ({ ...position })) })
 }

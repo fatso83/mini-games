@@ -20,4 +20,9 @@ describe('createGame', () => {
     const game = createGame({ config: { ...DEFAULT_GAME_CONFIG }, playerIds: ['one'], random: () => 0 })
     expect(Object.isFrozen(game.config)).toBe(true)
   })
+  it('supports the special prototype key as a real player ID', () => {
+    const game = createGame({ config: DEFAULT_GAME_CONFIG, playerIds: ['__proto__'], random: () => 0 })
+    expect(Object.prototype.hasOwnProperty.call(game.players, '__proto__')).toBe(true)
+    expect(game.players['__proto__']?.id).toBe('__proto__')
+  })
 })

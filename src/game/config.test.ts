@@ -22,6 +22,7 @@ describe('game configuration', () => {
     ['base below minimum', { baseTickMs: 59, minTickMs: 60 }],
     ['zero speed step', { speedStepMs: 0 }], ['negative speed step', { speedStepMs: -1 }],
     ['zero minimum', { minTickMs: 0 }], ['zero points', { pointsPerFood: 0 }],
+    ['NaN points', { pointsPerFood: Number.NaN }], ['infinite points', { pointsPerFood: Number.POSITIVE_INFINITY }], ['negative infinite points', { pointsPerFood: Number.NEGATIVE_INFINITY }],
     ['zero queue', { inputQueueSize: 0 }], ['fractional queue', { inputQueueSize: 1.5 }],
   ])('rejects %s', (_name, change) => {
     expect(() => createGameConfig({ ...DEFAULT_GAME_CONFIG, ...change })).toThrow()

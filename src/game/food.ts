@@ -12,9 +12,9 @@ export function listFreeCells(config: GameConfig, players: readonly PlayerState[
 }
 
 export function placeFood(config: GameConfig, players: readonly PlayerState[], random: RandomSource): Position | null {
-  const value = random()
-  if (!Number.isFinite(value) || value < 0 || value >= 1) throw new Error('random source must return a value in [0, 1)')
   const free = listFreeCells(config, players)
   if (!free.length) return null
+  const value = random()
+  if (!Number.isFinite(value) || value < 0 || value >= 1) throw new Error('random source must return a value in [0, 1)')
   return free[Math.floor(value * free.length)] ?? null
 }

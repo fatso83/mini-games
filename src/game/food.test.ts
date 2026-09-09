@@ -20,7 +20,8 @@ describe('food placement', () => {
   })
   it('returns null on a full board and rejects invalid random values', () => {
     const config = { ...DEFAULT_GAME_CONFIG, width: 1, height: 1 }
-    expect(placeFood(config, [player([{ x: 0, y: 0 }])], () => 0)).toBeNull()
+    const random = () => { throw new Error('random should not be called') }
+    expect(placeFood(config, [player([{ x: 0, y: 0 }])], random)).toBeNull()
     expect(() => placeFood(config, [], () => -0.1)).toThrow(/random/i)
     expect(() => placeFood(config, [], () => 1)).toThrow(/random/i)
   })

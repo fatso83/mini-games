@@ -12,7 +12,7 @@ export function createGame(options: CreateGameOptions): GameState {
   if (!options.playerIds.length) throw new Error('playerIds must not be empty')
   if (new Set(options.playerIds).size !== options.playerIds.length) throw new Error('playerIds must be unique')
   const config = createGameConfig(options.config)
-  const players: Record<PlayerId, PlayerState> = {}
+  const players: Record<PlayerId, PlayerState> = Object.create(null) as Record<PlayerId, PlayerState>
   for (const id of options.playerIds) {
     players[id] = {
       id,
