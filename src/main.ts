@@ -29,11 +29,11 @@ function createView(root: HTMLElement): { canvas: HTMLCanvasElement; score: HTML
   const existingCanvas = root.querySelector<HTMLCanvasElement>('canvas')
   root.classList.add('snake-app')
   root.innerHTML = `<section class="snake-card" aria-label="Snake-spill">
-    <header class="snake-header"><div><p class="eyebrow">Nettlespill</p><h1>Snake</h1></div><dl class="snake-score"><dt>Poeng</dt><dd data-score>0</dd></dl></header>
-    <p class="snake-status" data-status aria-live="polite">Klar</p>
+    <header class="snake-header"><div><p class="eyebrow">Nettlespill</p><h1 id="game-title">Snake</h1></div><dl class="snake-score"><dt>Poeng</dt><dd data-score>0</dd></dl></header>
+    <p class="snake-status" id="game-status" data-status aria-live="polite">Klar</p>
     <div class="snake-board-wrap"><p class="snake-error" data-error role="alert" hidden></p></div>
     <div class="snake-actions"><button type="button" data-new-round>Ny runde</button></div>
-    <p class="snake-instructions">Bruk piltaster eller WASD for å styre. Mellomrom pauser og fortsetter.</p>
+    <p class="snake-instructions" id="game-instructions">Bruk piltaster eller WASD for å styre. Mellomrom pauser og fortsetter.</p>
   </section>`
   const boardWrap = root.querySelector<HTMLElement>('.snake-board-wrap')!
   const canvas = existingCanvas ?? document.createElement('canvas')
@@ -41,6 +41,9 @@ function createView(root: HTMLElement): { canvas: HTMLCanvasElement; score: HTML
   if (!canvas.width) canvas.width = 400
   if (!canvas.height) canvas.height = 400
   if (!canvas.getAttribute('aria-label')) canvas.setAttribute('aria-label', 'Snake-spillflate')
+  canvas.setAttribute('role', 'application')
+  canvas.setAttribute('aria-labelledby', 'game-title')
+  canvas.setAttribute('aria-describedby', 'game-status game-instructions')
   boardWrap.prepend(canvas)
   return { canvas, score: root.querySelector('[data-score]')!, status: root.querySelector('[data-status]')!, newRound: root.querySelector('[data-new-round]')!, error: root.querySelector('[data-error]')! }
 }
@@ -59,6 +62,9 @@ export function mountGame(root: HTMLElement, deps: AppDependencies): MountedGame
   } catch (error) {
     view.error.hidden = false
     view.error.textContent = 'Kan ikke starte spillet: Canvas-grafikk er ikke tilgjengelig.'
+    view.newRound.disabled = true
+    const instructions = root.querySelector<HTMLElement>('.snake-instructions')
+    if (instructions) instructions.hidden = true
     console.error(error)
     return { destroy: () => undefined, getState: () => state }
   }
