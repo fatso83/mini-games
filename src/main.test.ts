@@ -145,7 +145,7 @@ describe('mountGame', () => {
     expect(mounted.getState().status).toBe('running')
     mounted.destroy()
     canvas.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }))
+    canvas.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))
     button.click()
     expect(focus).not.toHaveBeenCalled()
     expect(mounted.getState().status).toBe('running')
