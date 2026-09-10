@@ -111,9 +111,32 @@ describe('stepGame', () => {
     expect(result.players.one!.body[0]).toEqual({ x: 9, y: 10 })
   })
 
-  it('loses when food is on a geometrically colliding retained segment', () => {
-    const state = withPlayer({ ...runningGame(), food: { x: 11, y: 10 } }, 'one', { body: [{ x: 10, y: 10 }, { x: 11, y: 10 }], direction: 'right' })
-    expect(stepGame(state, 'one', random).status).toBe('lost')
+  it.each([
+    {
+      name: 'on the tail directly ahead',
+      body: [{ x: 10, y: 10 }, { x: 11, y: 10 }],
+      direction: 'right' as const,
+      food: { x: 11, y: 10 },
+    },
+    {
+      name: 'on the tail across the wrap boundary',
+      body: [{ x: 0, y: 10 }, { x: 19, y: 10 }],
+      direction: 'left' as const,
+      food: { x: 19, y: 10 },
+    },
+  ])('loses without awarding the food when it grows into its tail: $name', ({ body, direction, food }) => {
+    const state = withPlayer({ ...runningGame(), food }, 'one', { body, direction, score: 7 })
+    let randomCalls = 0
+    const result = stepGame(state, 'one', () => {
+      randomCalls += 1
+      return 0
+    })
+
+    expect(result.status).toBe('lost')
+    expect(result.players.one!.score).toBe(7)
+    expect(result.food).toEqual(food)
+    expect(result.tickIntervalMs).toBe(state.tickIntervalMs)
+    expect(randomCalls).toBe(0)
   })
 
   it('wins after eating the final free cell', () => {
