@@ -33,7 +33,7 @@ function movePlayer(player: PlayerState, state: GameState): MoveResult {
     body,
     direction,
     queuedDirections,
-    score: ate ? player.score + state.config.pointsPerFood : player.score,
+    score: player.score,
   }, ate, collision }
 }
 
@@ -51,6 +51,10 @@ export function stepGame(state: GameState, playerId: PlayerId, random: RandomSou
   if (!moved) return state
   if (moved.collision) return { ...state, players: Object.freeze(players), status: 'lost' }
   if (!moved.ate) return { ...state, players: Object.freeze(players) }
+  players[playerId] = {
+    ...players[playerId]!,
+    score: players[playerId]!.score + state.config.pointsPerFood,
+  }
   const food = placeFood(state.config, Object.values(players), random)
   const tickIntervalMs = Math.max(state.config.minTickMs, state.tickIntervalMs - state.config.speedStepMs)
   return {
