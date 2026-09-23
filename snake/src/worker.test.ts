@@ -56,8 +56,17 @@ describe('Worker session boundary', () => {
 
   it('registry returns only recent summaries and removes stale entries', async () => {
     const storage = new MemoryStorage(); const registry = new PublicGameRegistry({ storage } as never, {} as never)
-    await registry.fetch(new Request('https://registry.test/register', { method: 'POST', body: JSON.stringify({ code: 'ABC234', hostName: 'Alice', playerCount: 1, maxPlayers: 4 }) }))
+    await registry.fetch(new Request('https://registry.test/register', { method: 'POST', body: JSON.stringify({ code: 'ABC234', hostName: 'Alice', playerCount: 1, maxPlayers: 4, revision: 1 }) }))
     expect(await (await registry.fetch(new Request('https://registry.test/list'))).json()).toEqual([{ code: 'ABC234', hostName: 'Alice', playerCount: 1, maxPlayers: 4 }])
+  })
+
+  it('does not revive a lobby when a delayed registration follows its removal', async () => {
+    const storage = new MemoryStorage(); const registry = new PublicGameRegistry({ storage } as never, {} as never)
+    const register = (revision: number): Request => new Request('https://registry.test/register', { method: 'POST', body: JSON.stringify({ code: 'ABC234', hostName: 'Oskar', playerCount: 1, maxPlayers: 4, revision }) })
+    await registry.fetch(register(1))
+    await registry.fetch(new Request('https://registry.test/unregister', { method: 'POST', body: JSON.stringify({ code: 'ABC234', revision: 2 }) }))
+    await registry.fetch(register(1))
+    expect(await (await registry.fetch(new Request('https://registry.test/list'))).json()).toEqual([])
   })
 
   it('uses configured share origins and rejects invalid local configuration', async () => {

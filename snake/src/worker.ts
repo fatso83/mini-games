@@ -12,7 +12,14 @@ export interface Env { readonly ASSETS: FetcherLike; readonly GAME_ROOMS: Durabl
 type RoomStatus = PublicSession['status']
 interface RoomPlayer extends Omit<MultiplayerPlayer, 'status'> { readonly status: 'active' | 'lost' | 'out'; readonly displayName: string; readonly connected: boolean; readonly totalScore: number }
 interface RoomState { code: string; isPublic: boolean; status: RoomStatus; countdown: PublicCountdown | null; hostId: string | null; level: number; tick: number; seq: number; food: Position | null; players: RoomPlayer[]; createdAt: number; resultsAt: number | null; winnerId: string | null }
-interface RegistryState { entries: Record<string, PublicGameSummary & { updatedAt: number }> }
+interface RegistryState {
+  entries: Record<string, PublicGameSummary & { updatedAt: number }>
+  /**
+   * A tombstone prevents an older, in-flight registration from reviving a
+   * lobby after its final player has disconnected.
+   */
+  revisions: Record<string, number>
+}
 
 const json = (value: unknown, status = 200): Response => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
 const same = (a: Position, b: Position): boolean => a.x === b.x && a.y === b.y
@@ -23,15 +30,18 @@ export class PublicGameRegistry {
   constructor(state: DurableObjectStateLike, _env: Env) { this.state = state }
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname
-    const current = await this.state.storage.get<RegistryState>('registry') ?? { entries: {} }
+    const stored = await this.state.storage.get<RegistryState>('registry')
+    const current: RegistryState = { entries: stored?.entries ?? {}, revisions: stored?.revisions ?? {} }
     const now = Date.now()
     for (const [code, entry] of Object.entries(current.entries)) if (now - entry.updatedAt > 180_000) delete current.entries[code]
     if (path === '/register' && request.method === 'POST') {
-      const value = await request.json() as Partial<PublicGameSummary>
-      if (typeof value.code !== 'string' || typeof value.hostName !== 'string' || value.playerCount !== 1 && value.playerCount !== 2 && value.playerCount !== 3 && value.playerCount !== 4) return new Response('invalid summary', { status: 400 })
+      const value = await request.json() as Partial<PublicGameSummary> & { revision?: unknown }
+      if (typeof value.code !== 'string' || typeof value.hostName !== 'string' || typeof value.revision !== 'number' || value.playerCount !== 1 && value.playerCount !== 2 && value.playerCount !== 3 && value.playerCount !== 4) return new Response('invalid summary', { status: 400 })
+      if (value.revision < (current.revisions[value.code] ?? -1)) return new Response('stale')
+      current.revisions[value.code] = value.revision
       current.entries[value.code] = { code: value.code, hostName: value.hostName, playerCount: value.playerCount, maxPlayers: 4, updatedAt: now }; await this.state.storage.put('registry', current); return new Response('ok')
     }
-    if (path === '/unregister' && request.method === 'POST') { const value = await request.json() as { code?: unknown }; if (typeof value.code === 'string') delete current.entries[value.code]; await this.state.storage.put('registry', current); return new Response('ok') }
+    if (path === '/unregister' && request.method === 'POST') { const value = await request.json() as { code?: unknown; revision?: unknown }; if (typeof value.code === 'string' && typeof value.revision === 'number' && value.revision >= (current.revisions[value.code] ?? -1)) { current.revisions[value.code] = value.revision; delete current.entries[value.code] } await this.state.storage.put('registry', current); return new Response('ok') }
     if (path === '/list' && request.method === 'GET') { await this.state.storage.put('registry', current); return json(Object.values(current.entries).map(({ updatedAt: _updatedAt, ...entry }) => entry)) }
     return new Response('Not found', { status: 404 })
   }
@@ -81,7 +91,7 @@ export class GameRoom {
     if (room.status === 'finished' && room.resultsAt !== null) { if (room.players.some((player) => player.connected)) { await this.state.storage.setAlarm(now + 180_000); return } if (now - room.resultsAt >= 180_000) { await this.unregister(); await this.state.storage.deleteAll(); this.room = null; return } await this.state.storage.setAlarm(room.resultsAt + 180_000); return }
     if (room.status === 'countdown') return this.advanceCountdown(now)
     if (room.status === 'running') { const events = this.tick(); room.seq += 1; await this.save(); this.broadcast({ cmd: 'diff', seq: room.seq, selfPlayerId: undefined, state: this.publicState(), events }); if (room.status === 'running') await this.state.storage.setAlarm(Date.now() + LEVELS[room.level - 1]!.tickIntervalMs); else await this.state.storage.setAlarm(Date.now() + 2_000); return }
-    if (room.status === 'results' && room.resultsAt !== null) { if (now < room.resultsAt + 2_000) { await this.state.storage.setAlarm(room.resultsAt + 2_000); return } room.players = room.players.filter((player) => player.connected); if (room.players.length === 0) { room.status = 'lobby'; room.countdown = null; room.resultsAt = null; room.winnerId = null; await this.state.storage.setAlarm(now + 180_000) } else if (room.level >= LEVELS.length && room.winnerId) { room.status = 'finished'; room.resultsAt = now; room.countdown = null; await this.state.storage.setAlarm(now + 180_000); } else { room.level += room.winnerId ? 1 : 0; room.tick = 0; room.hostId = room.players[0]?.id ?? null; room.players = room.players.map((player, index) => { const spawn = CORNER_SPAWNS[index]!; return { ...player, body: spawn.body.map((position) => ({ ...position })), direction: spawn.direction, queuedDirections: [], score: 0, status: 'active', connected: player.connected } }); const level = LEVELS[room.level - 1]!; const occupied = new Set(room.players.flatMap((player) => player.body.map((position) => `${position.x},${position.y}`))); room.food = null; for (let y = 0; y < level.height && room.food === null; y += 1) for (let x = 0; x < level.width; x += 1) if (!occupied.has(`${x},${y}`) && !level.obstacles.some((position) => position.x === x && position.y === y)) { room.food = { x, y }; break } room.resultsAt = null; room.winnerId = null; this.beginCountdown(now); await this.state.storage.setAlarm(now + 1_000) } room.seq += 1; await this.save(); await this.syncRegistry(); this.broadcast({ cmd: 'diff', seq: room.seq, selfPlayerId: undefined, state: this.publicState() }); }
+    if (room.status === 'results' && room.resultsAt !== null) { if (now < room.resultsAt + 2_000) { await this.state.storage.setAlarm(room.resultsAt + 2_000); return } room.players = room.players.filter((player) => player.connected); if (room.players.length === 0) { room.status = 'lobby'; room.countdown = null; room.resultsAt = null; room.winnerId = null; await this.state.storage.setAlarm(now + 180_000) } else if (room.level >= LEVELS.length && room.winnerId) { room.status = 'finished'; room.resultsAt = now; room.countdown = null; await this.state.storage.setAlarm(now + 180_000); } else { room.level += room.winnerId ? 1 : 0; room.tick = 0; room.hostId = room.players[0]?.id ?? null; room.players = room.players.map((player, index) => { const spawn = CORNER_SPAWNS[index]!; return { ...player, body: spawn.body.map((position) => ({ ...position })), direction: spawn.direction, queuedDirections: [], score: 0, status: 'active', connected: player.connected } }); const level = LEVELS[room.level - 1]!; const occupied = new Set(room.players.flatMap((player) => player.body.map((position) => `${position.x},${position.y}`))); room.food = null; for (let y = 0; y < level.height && room.food === null; y += 1) for (let x = 0; x < level.width; x += 1) if (!occupied.has(`${x},${y}`) && !level.obstacles.some((position) => position.x === x && position.y === y)) { room.food = { x, y }; break } room.resultsAt = null; room.winnerId = null; this.beginCountdown(now); await this.state.storage.setAlarm(now + 1_000) } room.seq += 1; await this.save(); const event = { cmd: 'diff' as const, seq: room.seq, selfPlayerId: undefined, state: this.publicState() }; this.broadcast(event); await this.syncRegistry(); }
   }
 
   private async load(): Promise<void> { if (this.room) return; const stored = await this.state.storage.get<RoomState>('room'); this.room = stored ? { ...stored, isPublic: stored.isPublic ?? false, countdown: stored.countdown ?? null, players: stored.players.map((player) => ({ ...player, totalScore: player.totalScore ?? player.score })) } : { code: '', isPublic: false, status: 'lobby', countdown: null, hostId: null, level: 1, tick: 0, seq: 0, food: null, players: [], createdAt: Date.now(), resultsAt: null, winnerId: null } }
@@ -90,9 +100,9 @@ export class GameRoom {
   private send(socket: WebSocket, event: ServerEvent): void { try { socket.send(JSON.stringify(event)) } catch { /* closed */ } }
   private error(socket: WebSocket, message: string): void { this.send(socket, { cmd: 'error', message, selfPlayerId: undefined }) }
   private broadcast(event: ServerEvent): void { for (const socket of this.state.getWebSockets()) { const playerId = this.getAttachment(socket)?.playerId ?? undefined; this.send(socket, { ...event, selfPlayerId: playerId }) as never } }
-  private async update(): Promise<void> { this.room!.seq += 1; await this.save(); await this.syncRegistry(); this.broadcast({ cmd: 'diff', seq: this.room!.seq, selfPlayerId: undefined, state: this.publicState() }) }
-  private async unregister(): Promise<void> { const namespace = this.env.PUBLIC_GAMES; if (!namespace || !this.room?.code) return; await namespace.get(namespace.idFromName('public')).fetch(new Request('https://registry.internal/unregister', { method: 'POST', body: JSON.stringify({ code: this.room.code }) })) }
-  private async syncRegistry(): Promise<void> { const namespace = this.env.PUBLIC_GAMES; const room = this.room; if (!namespace || !room?.code) return; const target = namespace.get(namespace.idFromName('public')); if (room.isPublic && room.status === 'lobby' && room.players.length > 0) { const host = room.players.find((player) => player.id === room.hostId) ?? room.players[0]!; await target.fetch(new Request('https://registry.internal/register', { method: 'POST', body: JSON.stringify({ code: room.code, hostName: host.displayName, playerCount: room.players.length, maxPlayers: 4 }) })); } else await this.unregister() }
+  private async update(): Promise<void> { this.room!.seq += 1; await this.save(); const event = { cmd: 'diff' as const, seq: this.room!.seq, selfPlayerId: undefined, state: this.publicState() }; this.broadcast(event); await this.syncRegistry() }
+  private async unregister(): Promise<void> { const namespace = this.env.PUBLIC_GAMES; if (!namespace || !this.room?.code) return; await namespace.get(namespace.idFromName('public')).fetch(new Request('https://registry.internal/unregister', { method: 'POST', body: JSON.stringify({ code: this.room.code, revision: this.room.seq }) })) }
+  private async syncRegistry(): Promise<void> { const namespace = this.env.PUBLIC_GAMES; const room = this.room; if (!namespace || !room?.code) return; const target = namespace.get(namespace.idFromName('public')); if (room.isPublic && room.status === 'lobby' && room.players.length > 0) { const host = room.players.find((player) => player.id === room.hostId) ?? room.players[0]!; await target.fetch(new Request('https://registry.internal/register', { method: 'POST', body: JSON.stringify({ code: room.code, hostName: host.displayName, playerCount: room.players.length, maxPlayers: 4, revision: room.seq }) })); } else await this.unregister() }
 
   private async join(socket: WebSocket, command: Extract<ClientCommand, { cmd: 'join' }>, existingId: string | null): Promise<void> {
     const room = this.room!; const name = validDisplayName(command.name)
