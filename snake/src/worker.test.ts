@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import worker, { GameRoom } from './worker'
+import worker, { GameRoom, PublicGameRegistry } from './worker'
 
 class MemoryStorage {
   private values = new Map<string, unknown>()
@@ -21,6 +21,16 @@ class FakeNamespace {
   }
 }
 
+class FakeRegistry {
+  summaries: unknown[] = []
+  requests: string[] = []
+  async fetch(request: Request): Promise<Response> {
+    this.requests.push(new URL(request.url).pathname)
+    if (new URL(request.url).pathname === '/list') return new Response(JSON.stringify(this.summaries), { headers: { 'content-type': 'application/json' } })
+    return new Response('ok')
+  }
+}
+
 describe('Worker session boundary', () => {
   it('creates a session and rejects a websocket for a nonexistent room', async () => {
     const namespace = new FakeNamespace()
@@ -31,6 +41,23 @@ describe('Worker session boundary', () => {
     expect(body.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{6}$/)
     const missing = await worker.fetch(new Request('https://snake.test/api/sessions/ZZZZZZ/socket', { headers: { Upgrade: 'websocket' } }), env)
     expect(missing.status).toBe(404)
+  })
+
+  it('accepts and returns the public session flag and lists public games', async () => {
+    const namespace = new FakeNamespace(); const registry = new FakeRegistry()
+    const env = { ASSETS: { fetch: async () => new Response('<!doctype html>') }, GAME_ROOMS: namespace, PUBLIC_GAMES: { idFromName: () => 'public', get: () => registry } }
+    const created = await worker.fetch(new Request('https://snake.test/api/sessions', { method: 'POST', body: JSON.stringify({ isPublic: true }), headers: { 'content-type': 'application/json' } }), env)
+    expect(await created.json()).toMatchObject({ isPublic: true })
+    registry.summaries = [{ code: 'ABC234', hostName: 'Alice', playerCount: 1, maxPlayers: 4 }]
+    const listed = await worker.fetch(new Request('https://snake.test/api/public-games'), env)
+    expect(await listed.json()).toEqual({ games: registry.summaries })
+    expect(registry.requests).toContain('/list')
+  })
+
+  it('registry returns only recent summaries and removes stale entries', async () => {
+    const storage = new MemoryStorage(); const registry = new PublicGameRegistry({ storage } as never, {} as never)
+    await registry.fetch(new Request('https://registry.test/register', { method: 'POST', body: JSON.stringify({ code: 'ABC234', hostName: 'Alice', playerCount: 1, maxPlayers: 4 }) }))
+    expect(await (await registry.fetch(new Request('https://registry.test/list'))).json()).toEqual([{ code: 'ABC234', hostName: 'Alice', playerCount: 1, maxPlayers: 4 }])
   })
 
   it('uses configured share origins and rejects invalid local configuration', async () => {
@@ -216,6 +243,69 @@ describe('Worker session boundary', () => {
       await room.alarm()
       expect(await storage.get<{ status: string; countdown: unknown; resultsAt: number }>('room')).toMatchObject({ status: 'finished', countdown: null, resultsAt: 5_000 })
       expect(storage.alarm).toBe(185_000)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('keeps a finished room alive while a player remains connected', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(5_000)
+    try {
+      const storage = new MemoryStorage()
+      await storage.put('room', { code: 'ABC234', status: 'results', countdown: null, hostId: 'p1', level: 4, tick: 4, seq: 7, food: null, players: [{ id: 'p1', displayName: 'Alice', body: [{ x: 2, y: 2 }, { x: 1, y: 2 }, { x: 0, y: 2 }], direction: 'right', queuedDirections: [], score: 3, status: 'active', connected: true }], createdAt: 1_000, resultsAt: 3_000, winnerId: 'p1' })
+      const room = new GameRoom({ storage, acceptWebSocket: () => undefined, getWebSockets: () => [] }, {} as never)
+      await room.alarm()
+      expect(await storage.get<{ status: string; resultsAt: number }>('room')).toMatchObject({ status: 'finished', resultsAt: 5_000 })
+      expect(storage.alarm).toBe(185_000)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('migrates old players and exposes cumulative total scores', async () => {
+    const storage = new MemoryStorage(); const socket = new FakeSocket()
+    await storage.put('room', { code: 'ABC234', status: 'lobby', countdown: null, hostId: 'p1', level: 1, tick: 0, seq: 1, food: null, players: [{ id: 'p1', displayName: 'Alice', body: [{ x: 2, y: 2 }], direction: 'right', queuedDirections: [], score: 7, status: 'active', connected: true }], createdAt: 1_000, resultsAt: null, winnerId: null })
+    const room = new GameRoom({ storage, acceptWebSocket: () => undefined, getWebSockets: () => [socket as unknown as WebSocket] }, {} as never)
+    socket.serializeAttachment({ playerId: 'p1' })
+    await room.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ cmd: 'join', name: 'Alice' }))
+    expect((await storage.get<{ players: Array<{ totalScore: number }> }>('room'))!.players[0]!.totalScore).toBe(7)
+  })
+
+  it('allows only the host to restart a finished room and resets it to lobby', async () => {
+    const storage = new MemoryStorage(); const sockets: FakeSocket[] = []
+    await storage.put('room', { code: 'ABC234', status: 'finished', countdown: null, hostId: 'p1', level: 4, tick: 20, seq: 7, food: { x: 9, y: 9 }, players: [{ id: 'p1', displayName: 'Alice', body: [{ x: 2, y: 2 }], direction: 'right', queuedDirections: [], score: 3, totalScore: 30, status: 'active', connected: true }, { id: 'p2', displayName: 'Bob', body: [{ x: 4, y: 4 }], direction: 'left', queuedDirections: [], score: 2, totalScore: 20, status: 'out', connected: true }], createdAt: 1_000, resultsAt: 5_000, winnerId: 'p1' })
+    const state = { storage, acceptWebSocket: (socket: WebSocket) => sockets.push(socket as unknown as FakeSocket), getWebSockets: () => sockets as unknown as WebSocket[] }
+    const room = new GameRoom(state, {} as never)
+    const host = new FakeSocket(); const other = new FakeSocket(); sockets.push(host, other)
+    host.serializeAttachment({ playerId: 'p1' }); other.serializeAttachment({ playerId: 'p2' })
+    await room.webSocketMessage(other as unknown as WebSocket, JSON.stringify({ cmd: 'restart' }))
+    expect(other.sent.at(-1)).toContain('only the host')
+    await room.webSocketMessage(host as unknown as WebSocket, JSON.stringify({ cmd: 'restart' }))
+    expect(await storage.get<{ status: string; level: number; totalScore: number; winnerId: string | null; players: Array<{ totalScore: number; score: number; status: string }> }>('room')).toMatchObject({ status: 'lobby', level: 1, winnerId: null, players: [{ totalScore: 0, score: 0, status: 'active' }, { totalScore: 0, score: 0, status: 'active' }] })
+  })
+
+  it('reschedules finished cleanup while connected and deletes after final disconnect grace', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(5_000)
+    try {
+      const storage = new MemoryStorage()
+      await storage.put('room', { code: 'ABC234', status: 'finished', countdown: null, hostId: 'p1', level: 4, tick: 4, seq: 7, food: null, players: [{ id: 'p1', displayName: 'Alice', body: [{ x: 2, y: 2 }], direction: 'right', queuedDirections: [], score: 3, totalScore: 30, status: 'active', connected: true }], createdAt: 1_000, resultsAt: 3_000, winnerId: 'p1' })
+      const room = new GameRoom({ storage, acceptWebSocket: () => undefined, getWebSockets: () => [] }, {} as never)
+      await room.alarm()
+      expect(await storage.get('room')).toBeTruthy()
+      expect(storage.alarm).toBe(185_000)
+      await storage.put('room', { ...(await storage.get<Record<string, unknown>>('room'))!, players: [{ id: 'p1', displayName: 'Alice', body: [{ x: 2, y: 2 }], direction: 'right', queuedDirections: [], score: 3, totalScore: 30, status: 'out', connected: false }] })
+      vi.setSystemTime(185_000); await new GameRoom({ storage, acceptWebSocket: () => undefined, getWebSockets: () => [] }, {} as never).alarm()
+      expect(await storage.get('room')).toBeUndefined()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('increments total score once when food is eaten and preserves it into the next round', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1_000)
+    try {
+      const storage = new MemoryStorage()
+      await storage.put('room', { code: 'ABC234', status: 'running', countdown: null, hostId: 'p1', level: 1, tick: 0, seq: 1, food: { x: 3, y: 2 }, players: [{ id: 'p1', displayName: 'Alice', body: [{ x: 2, y: 2 }, { x: 1, y: 2 }, { x: 0, y: 2 }], direction: 'right', queuedDirections: [], score: 0, totalScore: 0, status: 'active', connected: true }], createdAt: 1_000, resultsAt: null, winnerId: null })
+      const room = new GameRoom({ storage, acceptWebSocket: () => undefined, getWebSockets: () => [] }, {} as never)
+      await room.alarm()
+      expect(await storage.get<{ players: Array<{ score: number; totalScore: number }> }>('room')).toMatchObject({ players: [{ score: 10, totalScore: 10 }] })
+      await storage.put('room', { ...(await storage.get<Record<string, unknown>>('room'))!, status: 'results', level: 1, resultsAt: 1_000, winnerId: 'p1' })
+      vi.setSystemTime(3_000); await new GameRoom({ storage, acceptWebSocket: () => undefined, getWebSockets: () => [] }, {} as never).alarm()
+      expect(await storage.get<{ level: number; players: Array<{ score: number; totalScore: number }> }>('room')).toMatchObject({ level: 2, players: [{ score: 0, totalScore: 10 }] })
     } finally { vi.useRealTimers() }
   })
 })

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "npm run build && node scripts/dev-launcher.mjs",
     "build": "tsc --noEmit && vite build",
+    "deploy": "npm exec wrangler deploy",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -17,6 +17,13 @@ export interface CountdownView {
   readonly endsAt: number
 }
 
+interface PublicGame {
+  readonly code: string
+  readonly hostName: string
+  readonly playerCount: number
+  readonly maxPlayers: number
+}
+
 export function countdownFontSize(countdown: CountdownView, now: number, boardHeight: number): number {
   const duration = Math.max(1, countdown.endsAt - countdown.startedAt)
   const progress = Math.max(0, Math.min(1, (now - countdown.startedAt) / duration))
@@ -119,9 +126,11 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
   root.innerHTML = `<section class="snake-card multiplayer-card" aria-label="Flerspiller">
     <p class="eyebrow">Flerspiller</p><h1>${mode === 'host' ? 'Opprett spill' : 'Bli med i spill'}</h1>
     <form data-multiplayer-form>${mode === 'join' ? '<label>Spillkode<input name="code" maxlength="6" pattern="[A-Za-z0-9]{6}" required autocomplete="off"></label>' : ''}
+      ${mode === 'host' ? '<label class="checkbox-label"><input type="checkbox" name="isPublic">Gjør spillet offentlig</label>' : ''}
       <label>Navn<input name="name" maxlength="24" required autocomplete="nickname"></label><button type="submit">${mode === 'host' ? 'Opprett spill' : 'Bli med'}</button></form>
+      ${mode === 'join' ? '<section class="public-games" data-public-games aria-labelledby="public-games-title"><h2 id="public-games-title">Offentlige spill</h2><p data-public-games-status aria-live="polite">Laster offentlige spill…</p><ul data-public-games-list></ul></section>' : ''}
       <div data-room hidden><p class="room-code" data-room-code></p><p data-share></p><button type="button" data-copy>Copy share link</button><canvas data-qr aria-label="QR-kode"></canvas><div class="snake-board-wrap multiplayer-board-wrap"><canvas class="snake-board" data-remote-board tabindex="0" aria-label="Flerspillerbrett"></canvas><p class="countdown-overlay" data-countdown-overlay aria-live="assertive" aria-atomic="true" hidden><span data-countdown-label></span></p></div>
-      <p data-room-status aria-live="polite">Venter…</p><ul data-roster></ul><button type="button" data-start hidden>Start spill</button></div>
+      <p data-room-status aria-live="polite">Venter…</p><ul data-roster></ul><section class="multiplayer-scoreboard" data-scoreboard hidden aria-labelledby="scoreboard-title"><h2 id="scoreboard-title">Poengliste</h2><ol data-scoreboard-list></ol></section><button type="button" data-start hidden>Start spill</button><button type="button" data-restart hidden>Start på nytt</button></div>
     <button type="button" data-back>Tilbake</button></section>`
   const form = root.querySelector<HTMLFormElement>('[data-multiplayer-form]')!
   const room = root.querySelector<HTMLElement>('[data-room]')!
@@ -132,7 +141,12 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
   const countdownLabel = root.querySelector<HTMLElement>('[data-countdown-label]')!
   const qr = root.querySelector<HTMLCanvasElement>('[data-qr]')!
   const start = root.querySelector<HTMLButtonElement>('[data-start]')!
+  const restart = root.querySelector<HTMLButtonElement>('[data-restart]')!
+  const scoreboard = root.querySelector<HTMLElement>('[data-scoreboard]')!
+  const scoreboardList = root.querySelector<HTMLOListElement>('[data-scoreboard-list]')!
   const copy = root.querySelector<HTMLButtonElement>('[data-copy]')!
+  const publicGamesStatus = root.querySelector<HTMLElement>('[data-public-games-status]')
+  const publicGamesList = root.querySelector<HTMLElement>('[data-public-games-list]')
   let animationFrame: number | null = null
   let lastCountdownLabel: string | null = null
 
@@ -180,8 +194,73 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
   const requestRedraw = (): void => {
     if (animationFrame === null && shouldAnimate()) animationFrame = requestAnimationFrame(renderFrame)
   }
+  const renderScoreboard = (players: readonly Record<string, unknown>[]): void => {
+    const compareCodePoints = (left: unknown, right: unknown): number => {
+      const leftCodePoints = Array.from(String(left ?? '').normalize('NFKD').toLowerCase(), character => character.codePointAt(0) ?? 0)
+      const rightCodePoints = Array.from(String(right ?? '').normalize('NFKD').toLowerCase(), character => character.codePointAt(0) ?? 0)
+      const length = Math.min(leftCodePoints.length, rightCodePoints.length)
+      for (let index = 0; index < length; index += 1) {
+        if (leftCodePoints[index] !== rightCodePoints[index]) return leftCodePoints[index]! - rightCodePoints[index]!
+      }
+      return leftCodePoints.length - rightCodePoints.length
+    }
+    const sorted = [...players].sort((left, right) => {
+      const leftScore = typeof left.totalScore === 'number' ? left.totalScore : 0
+      const rightScore = typeof right.totalScore === 'number' ? right.totalScore : 0
+      if (rightScore !== leftScore) return rightScore - leftScore
+      const nameOrder = compareCodePoints(left.name ?? left.id, right.name ?? right.id)
+      return nameOrder || compareCodePoints(left.id, right.id)
+    })
+    scoreboardList.replaceChildren(...sorted.map(player => {
+      const item = document.createElement('li')
+      const name = String(player.name ?? player.id ?? 'Spiller')
+      const score = typeof player.totalScore === 'number' ? player.totalScore : 0
+      item.textContent = `${name} – ${score}`
+      return item
+    }))
+  }
   if (initialCode) { const codeField = form.elements.namedItem('code') as HTMLInputElement | null; if (codeField) codeField.value = initialCode.toUpperCase() }
   void names.get().then(name => { const field = form.elements.namedItem('name') as HTMLInputElement | null; if (field && name) field.value = name })
+
+  const renderPublicGames = (games: PublicGame[]): void => {
+    if (!publicGamesStatus || !publicGamesList) return
+    const joinable = games.filter(game => game.code && game.hostName && game.playerCount < game.maxPlayers)
+    publicGamesList.replaceChildren(...joinable.map(game => {
+      const item = document.createElement('li')
+      const details = document.createElement('span')
+      details.textContent = `${game.hostName} (${game.playerCount}/${game.maxPlayers})`
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = 'Bli med'
+      button.setAttribute('data-public-game-code', game.code.toUpperCase())
+      button.addEventListener('click', () => {
+        const codeField = form.elements.namedItem('code') as HTMLInputElement | null
+        if (!codeField) return
+        codeField.value = game.code.toUpperCase()
+        form.requestSubmit()
+      })
+      item.append(details, button)
+      return item
+    }))
+    publicGamesStatus.textContent = joinable.length ? '' : 'Ingen offentlige spill tilgjengelig.'
+  }
+
+  if (mode === 'join' && publicGamesStatus) {
+    void fetcher('/api/public-games').then(response => {
+      if (!response.ok) throw new Error('public-games')
+      return response.json() as Promise<{ games?: unknown }>
+    }).then(result => {
+      const games = Array.isArray(result.games) ? result.games.flatMap(value => {
+        if (!value || typeof value !== 'object') return []
+        const candidate = value as Record<string, unknown>
+        if (typeof candidate.code !== 'string' || typeof candidate.hostName !== 'string' || typeof candidate.playerCount !== 'number' || typeof candidate.maxPlayers !== 'number') return []
+        return [{ code: candidate.code, hostName: candidate.hostName, playerCount: candidate.playerCount, maxPlayers: candidate.maxPlayers }]
+      }) : []
+      renderPublicGames(games)
+    }).catch(() => {
+      publicGamesStatus.textContent = 'Kunne ikke hente offentlige spill.'
+    })
+  }
 
   const connect = (code: string, name: string, shareUrlBase = location.origin): void => {
     if (destroyed) return
@@ -203,7 +282,14 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
       protocol = reduceServerMessage(protocol, message)
       const authoritativeState = protocol.snapshot
       start.hidden = !(protocol.phase === 'lobby' && authoritativeState?.hostId === protocol.selfPlayerId)
-      if (protocol.phase === 'ended') {
+      const isFinished = authoritativeState?.status === 'finished'
+      scoreboard.hidden = !isFinished
+      restart.hidden = !(isFinished && authoritativeState?.hostId === protocol.selfPlayerId)
+      if (isFinished) {
+        const players = Array.isArray(authoritativeState?.players) ? authoritativeState.players as Record<string, unknown>[] : []
+        renderScoreboard(players)
+        status.textContent = 'Poengliste'
+      } else if (protocol.phase === 'ended') {
         const winner = authoritativeState?.winnerId
         const winnerPlayer = winner && Array.isArray(authoritativeState?.players) ? (authoritativeState.players as Array<Record<string, unknown>>).find(player => player.id === winner) : null
         status.textContent = winner ? `Runden er ferdig – vinner: ${String(winnerPlayer?.name ?? winner)}` : 'Runden er ferdig.'
@@ -233,10 +319,12 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
     const code = String(data.get('code') || initialCode || '').trim().toUpperCase()
     if (!name) return
     if (mode === 'join') { if (code) connect(code, name); return }
-    void fetcher('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }).then(response => { if (!response.ok) throw new Error('session'); return response.json() as Promise<{ code: string; shareUrlBase?: string }> }).then(result => connect(result.code, name, result.shareUrlBase)).catch(() => { status.textContent = 'Kunne ikke opprette spill.' })
+    const isPublic = Boolean(data.get('isPublic'))
+    void fetcher('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, isPublic }) }).then(response => { if (!response.ok) throw new Error('session'); return response.json() as Promise<{ code: string; shareUrlBase?: string }> }).then(result => connect(result.code, name, result.shareUrlBase)).catch(() => { status.textContent = 'Kunne ikke opprette spill.' })
   }
   form.addEventListener('submit', submit)
   start.addEventListener('click', () => socket?.send(JSON.stringify({ cmd: 'start' })))
+  restart.addEventListener('click', () => socket?.send(JSON.stringify({ cmd: 'restart' })))
   const onKey = (event: KeyboardEvent): void => { const key = event.key.length === 1 ? event.key.toLowerCase() : event.key; const directions: Record<string, string> = { ArrowUp: 'up', w: 'up', ArrowDown: 'down', s: 'down', ArrowLeft: 'left', a: 'left', ArrowRight: 'right', d: 'right' }; const direction = directions[key]; if (direction && socket && protocol.phase === 'running') { event.preventDefault(); socket.send(JSON.stringify({ cmd: 'direction', direction })) } }
   board.addEventListener('keydown', onKey)
   root.querySelector('[data-back]')!.addEventListener('click', () => { socket?.close(); window.history.pushState({}, '', '/'); root.dispatchEvent(new CustomEvent('snake:navigate-home')) })

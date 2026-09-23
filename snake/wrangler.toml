@@ -11,6 +11,14 @@ not_found_handling = "single-page-application"
 name = "GAME_ROOMS"
 class_name = "GameRoom"
 
+[[durable_objects.bindings]]
+name = "PUBLIC_GAMES"
+class_name = "PublicGameRegistry"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GameRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["PublicGameRegistry"]

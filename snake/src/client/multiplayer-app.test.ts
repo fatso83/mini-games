@@ -14,9 +14,100 @@ class FakeSocket {
   close(): void { this.onclose?.() }
 }
 
-afterEach(() => { document.body.innerHTML = '' })
+afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks() })
 
 describe('multiplayer board input', () => {
+  const connectClient = () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({ clearRect: vi.fn(), fillRect: vi.fn(), fillStyle: '' } as unknown as CanvasRenderingContext2D))
+    const root = document.createElement('main')
+    document.body.append(root)
+    const mount = mountMultiplayerApp(root, 'join', 'ABC123', { WebSocket: FakeSocket as unknown as typeof WebSocket, location: window.location })
+    const form = root.querySelector('form')!
+    ;(form.elements.namedItem('name') as HTMLInputElement).value = 'Ada'
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    FakeSocket.instance.onopen?.()
+    return { root, mount }
+  }
+
+  it('renders a finished scoreboard sorted by total score with deterministic ties', () => {
+    const { root, mount } = connectClient()
+    FakeSocket.instance.onmessage?.({ data: JSON.stringify({ cmd: 'snapshot', seq: 1, selfPlayerId: 'p1', state: {
+      status: 'finished', hostId: 'p1', players: [
+        { id: 'p2', name: 'Zoe', totalScore: 20 },
+        { id: 'p1', name: 'Ada', totalScore: 20 },
+        { id: 'p3', name: 'Bob', totalScore: 40 },
+      ],
+    } }) } as MessageEvent)
+    expect(root.querySelector('[data-room-status]')?.textContent).toBe('Poengliste')
+    expect(Array.from(root.querySelectorAll('[data-scoreboard] li')).map(item => item.textContent)).toEqual(['Bob – 40', 'Ada – 20', 'Zoe – 20'])
+    expect(root.querySelector<HTMLElement>('[data-scoreboard]')?.hidden).toBe(false)
+    mount()
+  })
+
+  it('sorts equal-score non-ASCII names with locale-independent ordering', () => {
+    const localeCompare = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => 1)
+    const { root, mount } = connectClient()
+    try {
+      FakeSocket.instance.onmessage?.({ data: JSON.stringify({ cmd: 'snapshot', seq: 1, selfPlayerId: 'p1', state: {
+        status: 'finished', hostId: 'p1', players: [
+          { id: 'p-z', name: 'Åsa', totalScore: 10 },
+          { id: 'p-a', name: 'Asa', totalScore: 10 },
+        ],
+      } }) } as MessageEvent)
+      expect(Array.from(root.querySelectorAll('[data-scoreboard] li')).map(item => item.textContent)).toEqual(['Asa – 10', 'Åsa – 10'])
+      mount()
+    } finally {
+      localeCompare.mockRestore()
+    }
+  })
+
+  it('uses locale-independent ID ordering when normalized names are equal', () => {
+    const localeCompare = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => 1)
+    const { root, mount } = connectClient()
+    try {
+      FakeSocket.instance.onmessage?.({ data: JSON.stringify({ cmd: 'snapshot', seq: 1, selfPlayerId: 'p1', state: {
+        status: 'finished', hostId: 'p1', players: [
+          { id: 'Å-id', name: 'Éva', totalScore: 10 },
+          { id: 'A-id', name: 'e\u0301va', totalScore: 10 },
+        ],
+      } }) } as MessageEvent)
+      expect(Array.from(root.querySelectorAll('[data-scoreboard] li')).map(item => item.textContent)).toEqual(['éva – 10', 'Éva – 10'])
+      mount()
+    } finally {
+      localeCompare.mockRestore()
+    }
+  })
+
+  it('shows restart only to the host and sends the restart command', () => {
+    const { root, mount } = connectClient()
+    FakeSocket.instance.onmessage?.({ data: JSON.stringify({ cmd: 'snapshot', seq: 1, selfPlayerId: 'p1', state: { status: 'finished', hostId: 'p1', players: [{ id: 'p1', name: 'Ada', totalScore: 1 }] } }) } as MessageEvent)
+    const restart = root.querySelector<HTMLButtonElement>('[data-restart]')!
+    expect(restart.hidden).toBe(false)
+    restart.click()
+    expect(FakeSocket.instance.sent.at(-1)).toBe('{"cmd":"restart"}')
+    mount()
+  })
+
+  it('does not show restart to a non-host finished player', () => {
+    const { root, mount } = connectClient()
+    FakeSocket.instance.onmessage?.({ data: JSON.stringify({ cmd: 'snapshot', seq: 1, selfPlayerId: 'p2', state: { status: 'finished', hostId: 'p1', players: [{ id: 'p1', name: 'Ada', totalScore: 1 }, { id: 'p2', name: 'Bob', totalScore: 2 }] } }) } as MessageEvent)
+    expect(root.querySelector<HTMLButtonElement>('[data-restart]')?.hidden).toBe(true)
+    mount()
+  })
+
+  it('returns to the lobby and hides the finished scoreboard after restart', () => {
+    const { root, mount } = connectClient()
+    const sendSnapshot = (seq: number, status: string, hostId = 'p1') => FakeSocket.instance.onmessage?.({ data: JSON.stringify({ cmd: 'snapshot', seq, selfPlayerId: 'p1', state: { status, hostId, players: [{ id: 'p1', name: 'Ada', totalScore: status === 'finished' ? 8 : 0 }] } }) } as MessageEvent)
+    sendSnapshot(1, 'finished')
+    expect(root.querySelector<HTMLElement>('[data-scoreboard]')?.hidden).toBe(false)
+    sendSnapshot(2, 'lobby')
+    expect(root.querySelector<HTMLElement>('[data-scoreboard]')?.hidden).toBe(true)
+    expect(root.querySelector<HTMLElement>('[data-restart]')?.hidden).toBe(true)
+    expect(root.querySelector<HTMLElement>('[data-start]')?.hidden).toBe(false)
+    expect(root.querySelector('[data-room-status]')?.textContent).toBe('Venter på spillere')
+    mount()
+  })
+
   it('sizes countdown text from 80% toward 40% over the server stage interval', () => {
     const countdown = { step: 3 as const, label: '3' as const, startedAt: 1_000, endsAt: 2_000 }
     expect(countdownFontSize(countdown, 1_000, 400)).toBe(320)
@@ -232,5 +323,53 @@ describe('multiplayer board input', () => {
     expect(width).toHaveBeenCalledTimes(1)
     expect(height).toHaveBeenCalledTimes(1)
     mount()
+  })
+})
+
+describe('multiplayer lobby discovery', () => {
+  it('posts the public checkbox value when creating a game', async () => {
+    const root = document.createElement('main')
+    document.body.append(root)
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ code: 'ABC123' }) })
+    mountMultiplayerApp(root, 'host', null, { fetch: fetcher, WebSocket: FakeSocket as unknown as typeof WebSocket, location: window.location })
+    const form = root.querySelector('form')!
+    ;(form.elements.namedItem('name') as HTMLInputElement).value = 'Ada'
+    const checkbox = form.elements.namedItem('isPublic') as HTMLInputElement
+    expect(checkbox).not.toBeNull()
+    checkbox.checked = true
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }))
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/sessions', expect.objectContaining({ body: JSON.stringify({ name: 'Ada', isPublic: true }) })))
+  })
+
+  it('lists public games and joins the selected code through the name form', async () => {
+    const root = document.createElement('main')
+    document.body.append(root)
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ games: [{ code: 'XYZ789', hostName: 'Ola', playerCount: 1, maxPlayers: 4 }] }) })
+    mountMultiplayerApp(root, 'join', null, { fetch: fetcher, WebSocket: FakeSocket as unknown as typeof WebSocket, location: window.location })
+    await vi.waitFor(() => expect(root.querySelector('[data-public-games]')?.textContent).toContain('Ola'))
+    const form = root.querySelector('form')!
+    ;(form.elements.namedItem('name') as HTMLInputElement).value = 'Ada'
+    root.querySelector<HTMLButtonElement>('[data-public-game-code="XYZ789"]')!.click()
+    expect((form.elements.namedItem('code') as HTMLInputElement).value).toBe('XYZ789')
+    expect(root.querySelector<HTMLElement>('[data-room]')?.hidden).toBe(false)
+    FakeSocket.instance.onopen?.()
+    expect(FakeSocket.instance.sent.at(-1)).toBe('{"cmd":"join","name":"Ada"}')
+  })
+
+  it('shows an empty state for a public games response with no joinable games', async () => {
+    const root = document.createElement('main')
+    document.body.append(root)
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ games: [] }) })
+    mountMultiplayerApp(root, 'join', null, { fetch: fetcher, WebSocket: FakeSocket as unknown as typeof WebSocket, location: window.location })
+    await vi.waitFor(() => expect(root.querySelector('[data-public-games-status]')?.textContent).toMatch(/Ingen offentlige spill/i))
+  })
+
+  it('shows a fetch error while keeping manual code entry available', async () => {
+    const root = document.createElement('main')
+    document.body.append(root)
+    const fetcher = vi.fn().mockRejectedValue(new Error('network'))
+    mountMultiplayerApp(root, 'join', null, { fetch: fetcher, WebSocket: FakeSocket as unknown as typeof WebSocket, location: window.location })
+    await vi.waitFor(() => expect(root.querySelector('[data-public-games-status]')?.textContent).toMatch(/Kunne ikke hente offentlige spill/i))
+    expect(root.querySelector('input[name="code"]')).not.toBeNull()
   })
 })
