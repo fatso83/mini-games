@@ -14,7 +14,7 @@ export interface ClientProtocolState {
   readonly lastSeq: number
   readonly gap: boolean
   readonly connected: boolean
-  readonly phase: 'idle' | 'lobby' | 'countdown' | 'running' | 'ended' | 'error'
+  readonly phase: 'idle' | 'lobby' | 'countdown' | 'running' | 'paused' | 'ended' | 'error'
   readonly snapshot: ClientSnapshot | null
   readonly roster: readonly Record<string, unknown>[]
   readonly error: string | null
@@ -30,7 +30,7 @@ export function reduceServerMessage(state: ClientProtocolState, message: ServerM
   const nextSeq = seq === null ? state.lastSeq : seq
   const gap = message.cmd === 'snapshot' ? false : seq !== null && seq > state.lastSeq + 1 ? true : state.gap
   const sessionState = message.state && typeof message.state === 'object' ? message.state as ClientSnapshot : null
-  const statusPhase = (value: unknown): ClientProtocolState['phase'] => value === 'countdown' ? 'countdown' : value === 'running' ? 'running' : value === 'results' || value === 'finished' ? 'ended' : 'lobby'
+  const statusPhase = (value: unknown): ClientProtocolState['phase'] => value === 'countdown' ? 'countdown' : value === 'running' ? 'running' : value === 'paused' ? 'paused' : value === 'results' || value === 'finished' ? 'ended' : 'lobby'
   const nextSnapshot = sessionState ?? (message.snapshot && typeof message.snapshot === 'object' ? message.snapshot as ClientSnapshot : null)
   const nextRoster = sessionState && Array.isArray(sessionState.players) ? sessionState.players as Record<string, unknown>[] : Array.isArray(message.players) ? message.players as Record<string, unknown>[] : state.roster
   const selfPlayerId = typeof message.selfPlayerId === 'string' ? message.selfPlayerId : typeof sessionState?.selfPlayerId === 'string' ? sessionState.selfPlayerId as string : state.selfPlayerId

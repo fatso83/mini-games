@@ -28,4 +28,10 @@ describe('client protocol reducer', () => {
     expect(state.phase).toBe('countdown')
     expect(state.snapshot).toMatchObject({ status: 'countdown', countdown: { step: 3, label: '3' } })
   })
+
+  it('exposes a paused session without discarding its authoritative snapshot', () => {
+    const state = reduceServerMessage(initialProtocolState(), { cmd: 'snapshot', seq: 4, state: { status: 'paused', pause: { reason: 'connection_lost' }, players: [{ id: 'p1', name: 'Ada' }] } })
+    expect(state.phase).toBe('paused')
+    expect(state.snapshot).toMatchObject({ status: 'paused' })
+  })
 })

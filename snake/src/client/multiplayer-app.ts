@@ -1,5 +1,6 @@
 import QRCode from 'qrcode'
 import { createDisplayNameStorage } from './name-storage'
+import { createRecoveryTokenStorage } from './recovery-storage'
 import { initialProtocolState, parseServerMessage, reduceServerMessage, type ClientProtocolState } from './protocol'
 
 export interface MultiplayerAppOptions {
@@ -114,12 +115,33 @@ export function normalizeShareBase(value: unknown, fallback: string): string {
   } catch { return fallback }
 }
 
+export async function copyText(value: string, clipboard: Pick<Clipboard, 'writeText'> | undefined = globalThis.navigator?.clipboard, documentLike: Document = globalThis.document): Promise<boolean> {
+  try {
+    if (clipboard) { await clipboard.writeText(value); return true }
+  } catch { /* HTTP origins and denied permissions use the fallback below. */ }
+  const field = documentLike.createElement('textarea')
+  field.value = value
+  field.setAttribute('readonly', '')
+  field.style.position = 'fixed'
+  field.style.opacity = '0'
+  documentLike.body.append(field)
+  field.select()
+  try { return documentLike.execCommand('copy') } catch { return false } finally { field.remove() }
+}
+
 export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', initialCode: string | null = null, options: MultiplayerAppOptions = {}): () => void {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis)
   const WebSocketClass = options.WebSocket ?? globalThis.WebSocket
   const location = options.location ?? globalThis.location
   const names = createDisplayNameStorage()
+  const recoveryTokens = createRecoveryTokenStorage()
   let socket: WebSocket | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectAttempt = 0
+  let currentCode = ''
+  let currentName = ''
+  let resumeToken: string | null = null
+  let connectionLost = false
   let protocol: ClientProtocolState = initialProtocolState()
   let destroyed = false
   root.className = 'snake-app'
@@ -185,7 +207,7 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
 
   const renderFrame = (now: number): void => {
     animationFrame = null
-    if (destroyed || !protocol.snapshot) return
+    if (destroyed || connectionLost || !protocol.snapshot) return
     drawSnapshot(board, protocol.snapshot, protocol.selfPlayerId, now)
     updateCountdown(Date.now())
     if (shouldAnimate()) animationFrame = requestAnimationFrame(renderFrame)
@@ -271,14 +293,23 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
     root.querySelector<HTMLElement>('[data-room-code]')!.textContent = `Spillkode: ${normalizedCode}`
     const shareUrl = `${normalizeShareBase(shareUrlBase, location.origin)}/join?game=${encodeURIComponent(normalizedCode)}`
     root.querySelector<HTMLElement>('[data-share]')!.textContent = shareUrl
-    copy.onclick = () => { void navigator.clipboard?.writeText(shareUrl); copy.textContent = 'Copied!' }
+    copy.onclick = () => { void copyText(shareUrl).then(copied => { copy.textContent = copied ? 'Kopiert!' : 'Kunne ikke kopiere — marker lenken over og kopier.' }) }
     start.hidden = mode !== 'host'
     void QRCode.toCanvas(qr, shareUrl).catch(() => undefined)
-    socket = new WebSocketClass(websocketUrl(normalizedCode, location))
-    socket.onopen = () => { protocol = { ...protocol, connected: true, phase: 'lobby' }; socket?.send(JSON.stringify({ cmd: 'join', name })) }
-    socket.onmessage = event => {
+    currentCode = normalizedCode
+    currentName = name
+    const reconnect = (): void => {
+      if (destroyed || !currentCode) return
+      socket = new WebSocketClass(websocketUrl(currentCode, location))
+      socket.onopen = () => {
+        connectionLost = false
+        protocol = { ...protocol, connected: true }
+        socket?.send(JSON.stringify(resumeToken ? { cmd: 'resume', token: resumeToken } : { cmd: 'join', name: currentName }))
+      }
+      socket.onmessage = event => {
       const message = parseServerMessage(String(event.data))
       if (!message) return
+      if (typeof message.resumeToken === 'string') { resumeToken = message.resumeToken; void recoveryTokens.set(currentCode, resumeToken) }
       protocol = reduceServerMessage(protocol, message)
       const authoritativeState = protocol.snapshot
       start.hidden = !(protocol.phase === 'lobby' && authoritativeState?.hostId === protocol.selfPlayerId)
@@ -293,7 +324,7 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
         const winner = authoritativeState?.winnerId
         const winnerPlayer = winner && Array.isArray(authoritativeState?.players) ? (authoritativeState.players as Array<Record<string, unknown>>).find(player => player.id === winner) : null
         status.textContent = winner ? `Runden er ferdig – vinner: ${String(winnerPlayer?.name ?? winner)}` : 'Runden er ferdig.'
-      } else status.textContent = protocol.error ?? (protocol.gap ? 'Mangler oppdateringer – venter på ny status.' : protocol.phase === 'running' ? 'Spillet pågår' : protocol.phase === 'countdown' ? 'Spillet starter…' : 'Venter på spillere')
+      } else status.textContent = protocol.error ?? (protocol.gap ? 'Mangler oppdateringer – venter på ny status.' : protocol.phase === 'running' ? 'Spillet pågår' : protocol.phase === 'countdown' ? 'Spillet starter…' : protocol.phase === 'paused' ? 'Spillet er satt på pause – venter på at spillere kobler til igjen.' : 'Venter på spillere')
       if (protocol.phase === 'running' && document.activeElement !== board) board.focus()
       roster.replaceChildren(...protocol.roster.map(player => { const item = document.createElement('li'); item.textContent = String(player.name ?? player.id ?? 'Spiller'); return item }))
       if (protocol.snapshot) {
@@ -302,15 +333,26 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
         if (shouldAnimate()) requestRedraw()
         else cancelRedraw()
       }
-    }
-    socket.onerror = () => { status.textContent = 'Kunne ikke koble til spillet.' }
-    socket.onclose = () => {
+      }
+      socket.onerror = () => { status.textContent = 'Kunne ikke koble til spillet.' }
+      socket.onclose = () => {
       if (destroyed) return
       cancelRedraw()
-      protocol = { ...protocol, snapshot: null }
       countdownOverlay.hidden = true
-      if (protocol.phase !== 'ended') status.textContent = 'Tilkoblingen ble avsluttet.'
+      connectionLost = true
+      protocol = { ...protocol, connected: false }
+      if (protocol.phase !== 'ended') status.textContent = 'Tilkoblingen ble brutt – spillet er satt på pause. Kobler til igjen…'
+      const delay = Math.min(10_000, 500 * 2 ** reconnectAttempt) + Math.floor(Math.random() * 250)
+      reconnectAttempt += 1
+      reconnectTimer = setTimeout(reconnect, delay)
+      }
     }
+    reconnect()
+    void recoveryTokens.get(normalizedCode).then(token => {
+      if (!token) return
+      resumeToken = token
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ cmd: 'resume', token }))
+    })
   }
   const submit = (event: SubmitEvent): void => {
     event.preventDefault()
@@ -333,6 +375,7 @@ export function mountMultiplayerApp(root: HTMLElement, mode: 'host' | 'join', in
     form.removeEventListener('submit', submit)
     board.removeEventListener('keydown', onKey)
     cancelRedraw()
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer)
     socket?.close()
   }
 }

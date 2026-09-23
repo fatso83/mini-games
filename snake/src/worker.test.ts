@@ -317,6 +317,26 @@ describe('Worker session boundary', () => {
       expect(await storage.get<{ level: number; players: Array<{ score: number; totalScore: number }> }>('room')).toMatchObject({ level: 2, players: [{ score: 0, totalScore: 10 }] })
     } finally { vi.useRealTimers() }
   })
+
+  it('freezes a late running alarm instead of simulating a missed tick', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(2_000)
+    try {
+      const storage = new MemoryStorage()
+      await storage.put('room', { code: 'ABC234', isPublic: false, status: 'running', countdown: null, pause: null, nextTickAt: 1_000, hostId: 'p1', level: 1, tick: 0, seq: 4, food: { x: 9, y: 9 }, players: [{ id: 'p1', recoveryToken: 'recovery-token-1234', displayName: 'Alice', body: [{ x: 2, y: 2 }, { x: 1, y: 2 }, { x: 0, y: 2 }], direction: 'right', queuedDirections: [], score: 0, totalScore: 0, status: 'active', connected: true }], createdAt: 1_000, resultsAt: null, winnerId: null })
+      await new GameRoom({ storage, acceptWebSocket: () => undefined, getWebSockets: () => [] }, {} as never).alarm()
+      expect(await storage.get<{ status: string; tick: number; pause: { reason: string; waitingPlayerIds: string[] } }>('room')).toMatchObject({ status: 'paused', tick: 0, pause: { reason: 'connection_lost', waitingPlayerIds: ['p1'] } })
+    } finally { vi.useRealTimers() }
+  })
+
+  it('restores a paused player with their recovery token and restarts the countdown', async () => {
+    const storage = new MemoryStorage(); const sockets: FakeSocket[] = []
+    const state = { storage, acceptWebSocket: (socket: WebSocket) => sockets.push(socket as unknown as FakeSocket), getWebSockets: () => sockets as unknown as WebSocket[] }
+    await storage.put('room', { code: 'ABC234', isPublic: false, status: 'paused', countdown: null, pause: { reason: 'connection_lost', pausedAt: 1_000, expiresAt: 181_000, waitingPlayerIds: ['p1'] }, nextTickAt: null, hostId: 'p1', level: 1, tick: 7, seq: 4, food: { x: 9, y: 9 }, players: [{ id: 'p1', recoveryToken: 'recovery-token-1234', displayName: 'Alice', body: [{ x: 2, y: 2 }, { x: 1, y: 2 }, { x: 0, y: 2 }], direction: 'right', queuedDirections: [], score: 10, totalScore: 20, status: 'active', connected: false }], createdAt: 1_000, resultsAt: null, winnerId: null })
+    const room = new GameRoom(state, {} as never); const socket = new FakeSocket(); sockets.push(socket)
+    await room.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ cmd: 'resume', token: 'recovery-token-1234' }))
+    expect(await storage.get<{ status: string; tick: number; countdown: { label: string }; players: Array<{ connected: boolean }> }>('room')).toMatchObject({ status: 'countdown', tick: 7, countdown: { label: '3' }, players: [{ connected: true }] })
+    expect(socket.sent.some(message => message.includes('recovery-token-1234'))).toBe(true)
+  })
 })
 
 class FakeSocket {

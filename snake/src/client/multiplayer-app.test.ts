@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('qrcode', () => ({ default: { toCanvas: vi.fn(() => Promise.resolve()) } }))
-import { countdownFontSize, mountMultiplayerApp, normalizeShareBase } from './multiplayer-app'
+import { copyText, countdownFontSize, mountMultiplayerApp, normalizeShareBase } from './multiplayer-app'
 
 class FakeSocket {
   static instance: FakeSocket
@@ -17,6 +17,13 @@ class FakeSocket {
 afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks() })
 
 describe('multiplayer board input', () => {
+  it('falls back to the document copy command when Clipboard API rejects the share URL', async () => {
+    const executeCopy = vi.fn(() => true)
+    const documentLike = { createElement: document.createElement.bind(document), body: document.body, execCommand: executeCopy } as unknown as Document
+    await expect(copyText('http://10.0.0.22:5173/join?game=ABC234', { writeText: async () => { throw new Error('insecure context') } }, documentLike)).resolves.toBe(true)
+    expect(executeCopy).toHaveBeenCalledWith('copy')
+  })
+
   const connectClient = () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({ clearRect: vi.fn(), fillRect: vi.fn(), fillStyle: '' } as unknown as CanvasRenderingContext2D))
     const root = document.createElement('main')
@@ -257,6 +264,23 @@ describe('multiplayer board input', () => {
     frames[0]?.(1_100)
     expect(clearRect).toHaveBeenCalledTimes(drawsBeforeClose)
     mount()
+  })
+
+  it('keeps the board state and uses the saved recovery token after reconnecting', () => {
+    vi.useFakeTimers()
+    try {
+      const { root, mount } = connectClient()
+      const first = FakeSocket.instance
+      first.onmessage?.({ data: JSON.stringify({ cmd: 'snapshot', seq: 4, selfPlayerId: 'p1', resumeToken: 'recovery-token-1234', state: { status: 'running', config: { width: 20, height: 20 }, players: [{ id: 'p1', name: 'Ada', status: 'active', body: [{ x: 1, y: 1 }] }] } }) } as MessageEvent)
+      first.close()
+      expect(root.querySelector('[data-room-status]')?.textContent).toContain('Kobler til igjen')
+      vi.advanceTimersByTime(1_000)
+      const recovered = FakeSocket.instance
+      expect(recovered).not.toBe(first)
+      recovered.onopen?.()
+      expect(recovered.sent.at(-1)).toBe('{"cmd":"resume","token":"recovery-token-1234"}')
+      mount()
+    } finally { vi.useRealTimers() }
   })
 
   it('draws visible player initials and pulses only the self player snake', () => {
