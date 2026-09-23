@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest'
+import { initialProtocolState, reduceServerMessage } from './protocol'
+
+describe('client protocol reducer', () => {
+  it('uses canonical snapshot status and derives lobby roster', () => {
+    const state = reduceServerMessage(initialProtocolState(), { cmd: 'snapshot', seq: 1, state: { status: 'lobby', players: [{ id: 'a', name: 'Ada' }] } })
+    expect(state.phase).toBe('lobby')
+    expect(state.roster).toEqual([{ id: 'a', name: 'Ada' }])
+  })
+
+  it('applies diff state and transitions to running only when server says so', () => {
+    const lobby = reduceServerMessage(initialProtocolState(), { cmd: 'snapshot', seq: 1, state: { status: 'lobby', players: [] } })
+    const running = reduceServerMessage(lobby, { cmd: 'diff', seq: 2, state: { status: 'running', players: [{ id: 'b', name: 'Bob' }] } })
+    expect(running.phase).toBe('running')
+    expect(running.snapshot).toMatchObject({ status: 'running' })
+    expect(running.roster[0]?.name).toBe('Bob')
+  })
+
+  it('accepts an initial sequence zero snapshot and clears a prior gap', () => {
+    const state = { ...initialProtocolState(), lastSeq: 2, gap: true }
+    const next = reduceServerMessage(state, { cmd: 'snapshot', seq: 0, state: { status: 'lobby', players: [] } })
+    expect(next.lastSeq).toBe(0)
+    expect(next.gap).toBe(false)
+  })
+})

@@ -7,6 +7,7 @@ import { createCanvasRenderer } from './browser/canvas-renderer'
 import { createFixedStepLoop } from './browser/fixed-step-loop'
 import { bindGameInput, type GameInputCommand } from './browser/input'
 import './styles.css'
+import { mountMultiplayerApp } from './client/multiplayer-app'
 
 export interface AppDependencies {
   readonly random: RandomSource
@@ -105,5 +106,14 @@ export function mountGame(root: HTMLElement, deps: AppDependencies): MountedGame
   return { destroy: () => { if (destroyed) return; destroyed = true; loop.stop(); unbindInput(); view.newRound.removeEventListener('click', onNewRound) }, getState: () => state }
 }
 
+function renderStartScreen(root: HTMLElement): void {
+  root.className = 'snake-app'
+  root.innerHTML = '<section class="snake-card landing-card"><p class="eyebrow">Nettlespill</p><h1>Snake</h1><p>Spill alene eller inviter venner.</p><div class="landing-actions"><button type="button" data-solo>Solo</button><button type="button" data-host>Start multiplayer</button><button type="button" data-join>Join multiplayer</button></div></section>'
+  const deps: AppDependencies = { random: () => Math.random(), now: () => performance.now(), requestFrame: callback => requestAnimationFrame(callback), cancelFrame: handle => cancelAnimationFrame(handle), getCanvasContext: canvas => canvas.getContext('2d'), devicePixelRatio: () => globalThis.devicePixelRatio || 1 }
+  root.querySelector('[data-solo]')!.addEventListener('click', () => mountGame(root, deps))
+  root.querySelector('[data-host]')!.addEventListener('click', () => mountMultiplayerApp(root, 'host'))
+  root.querySelector('[data-join]')!.addEventListener('click', () => mountMultiplayerApp(root, 'join'))
+}
 const app = document.querySelector<HTMLElement>('#app')
-if (app) mountGame(app, { random: () => Math.random(), now: () => performance.now(), requestFrame: (callback) => requestAnimationFrame(callback), cancelFrame: (handle) => cancelAnimationFrame(handle), getCanvasContext: (canvas) => canvas.getContext('2d'), devicePixelRatio: () => globalThis.devicePixelRatio || 1 })
+if (app) app.addEventListener('snake:navigate-home', () => renderStartScreen(app))
+if (app) { const code = new URLSearchParams(location.search).get('game'); if (location.pathname === '/join' || code) mountMultiplayerApp(app, 'join', code); else renderStartScreen(app) }
