@@ -36,7 +36,6 @@ const wrap = (value: number, limit: number): number => ((value % limit) + limit)
 
 export function resolveMultiplayerTick(input: MultiplayerTickInput): MultiplayerTickResult {
   const active = input.players.filter((player) => player.status === 'active')
-  const single = active.length <= 1
   const proposed = new Map<PlayerId, { player: MultiplayerPlayer; head: Position; ate: boolean; direction: Direction }>()
   for (const player of active) {
     const requested = player.queuedDirections[0]
@@ -61,12 +60,12 @@ export function resolveMultiplayerTick(input: MultiplayerTickInput): Multiplayer
     if (same(a.head, b.player.body[0]!) && same(b.head, a.player.body[0]!)) { lost.add(aId); lost.add(bId); events.push({ type: 'players-collided', playerIds: [aId, bId], position: a.head }) }
   }
   for (const [id, move] of proposed) {
-    if (input.obstacles.some((position) => same(position, move.head)) && !single) { lost.add(id); events.push({ type: 'player-lost', playerId: id, reason: 'obstacle' }) }
+    if (input.obstacles.some((position) => same(position, move.head))) { lost.add(id); events.push({ type: 'player-lost', playerId: id, reason: 'obstacle' }) }
   }
   for (const [id, move] of proposed) {
     if (lost.has(id)) continue
     const obstacle = input.obstacles.some((position) => same(position, move.head))
-    if (obstacle && !single) continue
+    if (obstacle) continue
     const bodyCollision = active.some((other) => {
       if (other.id === id) return other.body.slice(move.ate ? 0 : 1, move.ate ? undefined : -1).some((position) => same(position, move.head))
       const otherMove = proposed.get(other.id)!

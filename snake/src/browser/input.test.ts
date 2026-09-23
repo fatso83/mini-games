@@ -11,7 +11,7 @@ describe('mapKeyToCommand', () => {
     expect(mapKeyToCommand(key)).toEqual({ type: 'direction', direction })
   })
 
-  it.each([' ', 'Spacebar'])('%s toggles pause', (key) => {
+  it.each([' ', 'Spacebar', 'p', 'P'])('%s toggles pause', (key) => {
     expect(mapKeyToCommand(key)).toEqual({ type: 'round', command: 'toggle-pause' })
   })
 

@@ -34,7 +34,7 @@ function createView(root: HTMLElement): { canvas: HTMLCanvasElement; score: HTML
     <p class="snake-status" id="game-status" data-status aria-live="polite">Klar</p>
     <div class="snake-board-wrap"><p class="snake-error" data-error role="alert" hidden></p></div>
     <div class="snake-actions"><button type="button" data-new-round>Ny runde</button></div>
-    <p class="snake-instructions" id="game-instructions">Bruk piltaster eller WASD for å styre. Mellomrom pauser og fortsetter.</p>
+    <p class="snake-instructions" id="game-instructions">Bruk piltaster eller WASD for å styre. Mellomrom eller P pauser og fortsetter.</p>
   </section>`
   const boardWrap = root.querySelector<HTMLElement>('.snake-board-wrap')!
   const canvas = existingCanvas ?? document.createElement('canvas')

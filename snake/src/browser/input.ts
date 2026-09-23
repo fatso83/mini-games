@@ -20,7 +20,7 @@ export function mapKeyToCommand(key: string): GameInputCommand | null {
   const normalized = key.toLowerCase()
   const direction = directionByKey[normalized]
   if (direction) return { type: 'direction', direction }
-  if (key === ' ' || key === 'Spacebar') return { type: 'round', command: 'toggle-pause' }
+  if (key === ' ' || key === 'Spacebar' || normalized === 'p') return { type: 'round', command: 'toggle-pause' }
   if (key === 'Enter') return { type: 'round', command: 'new-round' }
   return null
 }

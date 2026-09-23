@@ -32,10 +32,9 @@ describe('resolveMultiplayerTick', () => {
     expect(result.players[0]!.body[0]).toEqual({ x: 2, y: 3 })
   })
 
-  it('ignores obstacles for a single active snake but removes a snake hitting one in multiplayer', () => {
+  it('removes a single active snake that hits an obstacle', () => {
     const solo = resolveMultiplayerTick({ width: 5, height: 5, obstacles: [{ x: 2, y: 2 }], food: null, random: () => 0, players: [p('a', [{ x: 1, y: 2 }], 'right')] })
-    expect(solo.players[0]!.status).toBe('active')
-    const multi = resolveMultiplayerTick({ width: 5, height: 5, obstacles: [{ x: 2, y: 2 }], food: null, random: () => 0, players: [p('a', [{ x: 1, y: 2 }], 'right'), p('b', [{ x: 4, y: 4 }], 'up')] })
-    expect(multi.players[0]!.status).toBe('lost')
+    expect(solo.players[0]!.status).toBe('lost')
+    expect(solo.events).toEqual([{ type: 'player-lost', playerId: 'a', reason: 'obstacle' }])
   })
 })

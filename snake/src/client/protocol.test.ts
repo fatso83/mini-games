@@ -22,4 +22,10 @@ describe('client protocol reducer', () => {
     expect(next.lastSeq).toBe(0)
     expect(next.gap).toBe(false)
   })
+
+  it('exposes countdown snapshots as a distinct phase', () => {
+    const state = reduceServerMessage(initialProtocolState(), { cmd: 'snapshot', seq: 1, state: { status: 'countdown', countdown: { step: 3, label: '3' }, players: [] } })
+    expect(state.phase).toBe('countdown')
+    expect(state.snapshot).toMatchObject({ status: 'countdown', countdown: { step: 3, label: '3' } })
+  })
 })
